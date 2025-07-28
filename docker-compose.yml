@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: 2fa-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  app:
+    build: .
+    container_name: 2fa-app
+    ports:
+      - "8090:8090"
+    environment:
+      - STORAGE_TYPE=redis
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - FROM_EMAIL=${FROM_EMAIL}
+      - APP_ENV=${APP_ENV:-development}
+    depends_on:
+      - redis
+    restart: unless-stopped
+    volumes:
+      - ./templates:/root/templates
+
+volumes:
+  redis_data: 

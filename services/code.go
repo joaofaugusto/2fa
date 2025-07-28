@@ -9,10 +9,10 @@ import (
 )
 
 type CodeService struct {
-	Store *storage.MemoryStore
+	Store storage.Storage
 }
 
-func NewCodeService(store *storage.MemoryStore) *CodeService {
+func NewCodeService(store storage.Storage) *CodeService {
 	return &CodeService{Store: store}
 }
 
@@ -23,8 +23,8 @@ func (s *CodeService) GenerateAndSaveCode(email string) string {
 }
 
 func (s *CodeService) ValidateCode(email, code string) bool {
-	storedCode, exists := s.Store.GetCode(email)
-	if !exists || storedCode != code {
+	storedCode, exists, err := s.Store.GetCode(email)
+	if err != nil || !exists || storedCode != code {
 		return false
 	}
 	s.Store.DeleteCode(email) // Remove após uso

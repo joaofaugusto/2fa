@@ -2,10 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"2fa-system/config"
@@ -14,41 +12,7 @@ import (
 	"2fa-system/storage"
 )
 
-var (
-	rateLimitMap = make(map[string]time.Time)
-	rateLimitMu  sync.Mutex
-	rateLimitDuration = time.Minute // 1 request per minute per email
-)
-
-var (
-	ipRateLimitMap = make(map[string]time.Time)
-	ipRateLimitMu  sync.Mutex
-	ipRateLimitDuration = time.Minute // 1 request per minute per IP
-)
-
-func rateLimit(email string) bool {
-	rateLimitMu.Lock()
-	defer rateLimitMu.Unlock()
-	last, exists := rateLimitMap[email]
-	if exists && time.Since(last) < rateLimitDuration {
-		return false // Blocked
-	}
-	rateLimitMap[email] = time.Now()
-	return true // Allowed
-}
-
-func ipRateLimit(ip string) bool {
-	ipRateLimitMu.Lock()
-	defer ipRateLimitMu.Unlock()
-	last, exists := ipRateLimitMap[ip]
-	if exists && time.Since(last) < ipRateLimitDuration {
-		return false // Blocked
-	}
-	ipRateLimitMap[ip] = time.Now()
-	return true // Allowed
-}
-
-func SendCodeHandler(cfg *config.Config, codeService *services.CodeService, emailService *services.EmailService) http.HandlerFunc {
+func SendCodeHandler(cfg *config.Config, codeService *services.CodeService, emailService *services.EmailService, store storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
@@ -61,16 +25,23 @@ func SendCodeHandler(cfg *config.Config, codeService *services.CodeService, emai
 			return
 		}
 
+		// Check IP rate limiting
 		ip := r.RemoteAddr
-		if !ipRateLimit(ip) {
+		ipKey := "ip:" + ip
+		if isLimited, err := store.IsRateLimited(ipKey); err == nil && isLimited {
 			http.Error(w, "Too many requests from your IP, please try again later.", http.StatusTooManyRequests)
 			return
 		}
 
-		if !rateLimit(req.Email) {
+		// Check email rate limiting
+		if isLimited, err := store.IsRateLimited(req.Email); err == nil && isLimited {
 			http.Error(w, "Too many requests, please try again later.", http.StatusTooManyRequests)
 			return
 		}
+
+		// Set rate limits
+		store.SaveRateLimit(ipKey, time.Minute)
+		store.SaveRateLimit(req.Email, time.Minute)
 
 		code := codeService.GenerateAndSaveCode(req.Email)
 		if err := emailService.SendCodeEmail(req.Email, code); err != nil {
@@ -81,14 +52,5 @@ func SendCodeHandler(cfg *config.Config, codeService *services.CodeService, emai
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(models.SendCodeResponse{Message: "Código enviado com sucesso"})
-	}
-}
-
-func MonitorHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, "<h1>2FA Monitor Panel</h1>")
-		fmt.Fprintf(w, "<h2>Per-Email Rate Limit</h2><pre>%v</pre>", rateLimitMap)
-		fmt.Fprintf(w, "<h2>Per-IP Rate Limit</h2><pre>%v</pre>", ipRateLimitMap)
 	}
 }
