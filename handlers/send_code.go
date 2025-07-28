@@ -4,22 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
-	"net/smtp"
 	"sync"
 	"time"
 
 	"2fa-system/config"
+	"2fa-system/models"
+	"2fa-system/services"
+	"2fa-system/storage"
 )
-
-type SendCodeRequest struct {
-	Email string `json:"email"`
-}
-
-type SendCodeResponse struct {
-	Message string `json:"message"`
-}
 
 var (
 	rateLimitMap = make(map[string]time.Time)
@@ -55,21 +48,16 @@ func ipRateLimit(ip string) bool {
 	return true // Allowed
 }
 
-func generateCode() string {
-	rand.Seed(time.Now().UnixNano())
-	return fmt.Sprintf("%06d", rand.Intn(1000000))
-}
-
-func SendCodeHandler(cfg *config.Config) http.HandlerFunc {
+func SendCodeHandler(cfg *config.Config, codeService *services.CodeService, emailService *services.EmailService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req SendCodeRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Requisição inválida", http.StatusBadRequest)
+		if r.Method != http.MethodPost {
+			http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
 			return
 		}
 
-		if !rateLimit(req.Email) {
-			http.Error(w, "Too many requests, please try again later.", http.StatusTooManyRequests)
+		var req models.SendCodeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Requisição inválida", http.StatusBadRequest)
 			return
 		}
 
@@ -79,31 +67,20 @@ func SendCodeHandler(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
-		code := generateCode()
+		if !rateLimit(req.Email) {
+			http.Error(w, "Too many requests, please try again later.", http.StatusTooManyRequests)
+			return
+		}
 
-		subject := "Seu código 2FA"
-		body := fmt.Sprintf("Seu código de verificação é: %s", code)
-		msg := "From: " + cfg.FromEmail + "\n" +
-			"To: " + req.Email + "\n" +
-			"Subject: " + subject + "\n\n" +
-			body
-
-		auth := smtp.PlainAuth("", cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPHost)
-		err := smtp.SendMail(
-			cfg.SMTPHost+":"+cfg.SMTPPort,
-			auth,
-			cfg.FromEmail,
-			[]string{req.Email},
-			[]byte(msg),
-		)
-		if err != nil {
+		code := codeService.GenerateAndSaveCode(req.Email)
+		if err := emailService.SendCodeEmail(req.Email, code); err != nil {
 			log.Printf("Erro ao enviar e-mail: %v", err)
 			http.Error(w, "Erro ao enviar e-mail", http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(SendCodeResponse{Message: "Código enviado com sucesso"})
+		json.NewEncoder(w).Encode(models.SendCodeResponse{Message: "Código enviado com sucesso"})
 	}
 }
 
